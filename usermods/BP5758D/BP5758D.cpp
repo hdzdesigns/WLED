@@ -8,27 +8,32 @@
   #define BP5758D_CLK_PIN 4
 #endif
 
-// BP5758D channel order used by this usermod.
+// Define custom ID for WLED Usermod index
+#ifndef USERMOD_ID_BP5758D
+  #define USERMOD_ID_BP5758D 158
+#endif
+
+// BP5758D physical channel order perfectly mapped to your ESPHome configuration
 enum : uint8_t {
-  BP_CH_RED = 0,
-  BP_CH_GREEN,
-  BP_CH_BLUE,
-  BP_CH_CW,
-  BP_CH_WW,
+  BP_CH_BLUE = 0,   // ESPHome Channel 1
+  BP_CH_GREEN = 1,  // ESPHome Channel 2
+  BP_CH_RED = 2,    // ESPHome Channel 3
+  BP_CH_WW = 3,     // ESPHome Channel 4
+  BP_CH_CW = 4,     // ESPHome Channel 5
   BP_CH_COUNT
 };
 
 class BP5758DDriver {
   private:
-    static const uint8_t _addrCurrent = 0x40;
-    static const uint8_t _addrPwmDirect = 0x66; // lower nibble 0110: direct grayscale addressing mode
-    static const uint16_t _ackTimeoutUs = 250;
+    // ESPHome specific addresses
+    static const uint8_t _addrStart5CH = 0xB0;  // 0x80 (Model ID) + 0x30 (5-Channel Start)
+    static const uint8_t _addrStandby = 0x80;   // Deep Sleep Command
+    static const uint8_t _channelEnable = 0x1F; // 0b00011111 (Enable all 5 channels)
 
     uint8_t _pinData;
     uint8_t _pinClock;
-    uint8_t _currents[BP_CH_COUNT] = {10, 10, 10, 20, 20};
+    uint8_t _currents[BP_CH_COUNT] = {12, 12, 12, 30, 30};
     uint8_t _values[BP_CH_COUNT] = {0, 0, 0, 0, 0};
-    bool _online = false;
 
     inline void sdaLow() {
       pinMode(_pinData, OUTPUT);
@@ -52,24 +57,6 @@ class BP5758DDriver {
       delayMicroseconds(2);
     }
 
-    bool waitAck() {
-      sdaHigh();
-      i2cDelay();
-      sclHigh();
-
-      uint32_t startUs = micros();
-      while (digitalRead(_pinData) == HIGH) {
-        if ((uint32_t)(micros() - startUs) > _ackTimeoutUs) {
-          sclLow();
-          return false;
-        }
-      }
-
-      i2cDelay();
-      sclLow();
-      return true;
-    }
-
     void startCondition() {
       sdaHigh();
       sclHigh();
@@ -88,7 +75,7 @@ class BP5758DDriver {
       i2cDelay();
     }
 
-    bool writeByte(uint8_t value) {
+    void writeByte(uint8_t value) {
       for (uint8_t i = 0; i < 8; i++) {
         sclLow();
         if (value & 0x80) sdaHigh(); else sdaLow();
@@ -97,87 +84,84 @@ class BP5758DDriver {
         i2cDelay();
         value <<= 1;
       }
+      
+      // 9th bit (ACK slot) 
+      // Blind Fire: We pulse the clock but completely ignore the chip's response
       sclLow();
-      return waitAck();
+      sdaHigh(); // Release SDA
+      i2cDelay();
+      sclHigh();
+      i2cDelay();
+      sclLow();
     }
 
-    static uint8_t clampCurrent(uint8_t ma) {
-      if (ma < 5) return 5;
-      if (ma > 60) return 60;
-      return ma;
-    }
-
-    // BP5758D current register uses coarse mA steps (2mA granularity in this mapping).
-    // This mapping is intentionally simple and safe for initial bring-up.
-    static uint8_t encodeCurrent(uint8_t ma) {
-      uint8_t clamped = clampCurrent(ma);
-      return (clamped - 4) / 2;
-    }
-
-    bool sendFrame(uint8_t command, const uint8_t* data, uint8_t len) {
-      startCondition();
-      if (!writeByte(command)) {
-        stopCondition();
-        return false;
-      }
-
-      for (uint8_t i = 0; i < len; i++) {
-        if (!writeByte(data[i])) {
-          stopCondition();
-          return false;
-        }
-      }
-
-      stopCondition();
-      return true;
+    // ESPHome reverse-engineered memory offset for high currents
+    uint8_t correctCurrent(uint8_t current) {
+      if (current < 64) return current;
+      return current > 90 ? 90 + 34 : current + 34; // Max out at 90mA to prevent melting
     }
 
   public:
     BP5758DDriver(uint8_t pinData, uint8_t pinClock)
       : _pinData(pinData), _pinClock(pinClock) {}
 
-    bool begin() {
+    void begin() {
       sdaHigh();
       sclHigh();
-      _online = true;
-      return applyCurrent();
     }
 
-    bool applyCurrent() {
-      uint8_t payload[BP_CH_COUNT];
-      for (uint8_t i = 0; i < BP_CH_COUNT; i++) payload[i] = encodeCurrent(_currents[i]);
-      _online = sendFrame(_addrCurrent, payload, BP_CH_COUNT);
-      return _online;
-    }
-
-    bool setCurrent(uint8_t r, uint8_t g, uint8_t b, uint8_t cw, uint8_t ww) {
-      _currents[BP_CH_RED] = r;
-      _currents[BP_CH_GREEN] = g;
-      _currents[BP_CH_BLUE] = b;
-      _currents[BP_CH_CW] = cw;
-      _currents[BP_CH_WW] = ww;
-      return applyCurrent();
+    void setCurrent(uint8_t r, uint8_t g, uint8_t b, uint8_t cw, uint8_t ww) {
+      // Maps the WLED input to the physical channels defined in the enum
+      _currents[BP_CH_RED] = correctCurrent(r);
+      _currents[BP_CH_GREEN] = correctCurrent(g);
+      _currents[BP_CH_BLUE] = correctCurrent(b);
+      _currents[BP_CH_CW] = correctCurrent(cw);
+      _currents[BP_CH_WW] = correctCurrent(ww);
     }
 
     inline void setChannel(uint8_t channel, uint8_t value) {
       if (channel < BP_CH_COUNT) _values[channel] = value;
     }
 
-    bool update() {
-      // BP5758D grayscale registers accept two bytes per channel.
-      // Expand 8-bit WLED values to 10-bit-ish space by left shift.
-      uint8_t payload[BP_CH_COUNT * 2];
-      for (uint8_t i = 0; i < BP_CH_COUNT; i++) {
-        uint16_t level = (uint16_t)_values[i] << 2;
-        payload[(i * 2)]     = (level >> 8) & 0x03;
-        payload[(i * 2) + 1] = level & 0xFF;
-      }
-      _online = sendFrame(_addrPwmDirect, payload, sizeof(payload));
-      return _online;
-    }
+    void update() {
+      uint8_t payload[17];
+      
+      // Byte 0: Start Address for 5 Channels
+      payload[0] = _addrStart5CH;
+      // Byte 1: Enable all 5 channels
+      payload[1] = _channelEnable;
+      
+      // Bytes 2-6: Current Limits mapped strictly to the physical layout
+      payload[2] = _currents[0]; // Ch 1
+      payload[3] = _currents[1]; // Ch 2
+      payload[4] = _currents[2]; // Ch 3
+      payload[5] = _currents[3]; // Ch 4
+      payload[6] = _currents[4]; // Ch 5
 
-    inline bool isOnline() const {
-      return _online;
+      // Bytes 7-16: 10-bit PWM values (2 bytes per channel)
+      for (uint8_t i = 0; i < BP_CH_COUNT; i++) {
+        uint16_t pwm10 = (uint16_t)_values[i] << 2; 
+        payload[7 + (i * 2)] = pwm10 & 0x1F;
+        payload[8 + (i * 2)] = (pwm10 >> 5) & 0x1F;
+      }
+
+      // Blast the entire 17-byte frame at once
+      startCondition();
+      for(int i = 0; i < 17; i++) {
+        writeByte(payload[i]);
+      }
+      stopCondition();
+
+      // Check if all channels are explicitly off (0 brightness)
+      if (_values[0] == 0 && _values[1] == 0 && _values[2] == 0 && _values[3] == 0 && _values[4] == 0) {
+        // Send the ESPHome Deep Sleep command
+        payload[0] = _addrStandby;
+        startCondition();
+        for(int i = 0; i < 17; i++) {
+          writeByte(payload[i]);
+        }
+        stopCondition();
+      }
     }
 };
 
@@ -188,10 +172,16 @@ class BP5758DUsermod : public Usermod {
   public:
     void setup() override {
       _bp.begin();
-      _bp.setCurrent(10, 10, 10, 20, 20);
+      // Initialize exactly to your ESPHome configuration
+      _bp.setCurrent(12, 12, 12, 30, 30);
     }
 
     void loop() override {
+      // THROTTLE: Only send data every 20ms (50 FPS limit)
+      static uint32_t lastUpdate = 0;
+      if (millis() - lastUpdate < 20) return;
+      lastUpdate = millis();
+
       uint32_t c = strip.getPixelColor(0);
 
       uint8_t r = ((c >> 16) & 0xFF) * bri / 255;
@@ -203,12 +193,17 @@ class BP5758DUsermod : public Usermod {
       uint8_t cw = (uint16_t)w * cct / 255;
       uint8_t ww = (uint16_t)w * (255 - cct) / 255;
 
+      // Assign the colors to their mapped channels
       _bp.setChannel(BP_CH_RED, r);
       _bp.setChannel(BP_CH_GREEN, g);
       _bp.setChannel(BP_CH_BLUE, b);
       _bp.setChannel(BP_CH_CW, cw);
       _bp.setChannel(BP_CH_WW, ww);
+
+      // PROTECT: Pause ESP8266 background tasks
+      noInterrupts();
       _bp.update();
+      interrupts();
     }
 
     uint16_t getId() override {
