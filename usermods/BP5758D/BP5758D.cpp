@@ -25,7 +25,6 @@ enum : uint8_t {
 
 class BP5758DDriver {
   private:
-    // ESPHome specific addresses
     static const uint8_t _addrStart5CH = 0xB0;  // 0x80 (Model ID) + 0x30 (5-Channel Start)
     static const uint8_t _addrStandby = 0x80;   // Deep Sleep Command
     static const uint8_t _channelEnable = 0x1F; // 0b00011111 (Enable all 5 channels)
@@ -85,20 +84,17 @@ class BP5758DDriver {
         value <<= 1;
       }
       
-      // 9th bit (ACK slot) 
-      // Blind Fire: We pulse the clock but completely ignore the chip's response
       sclLow();
-      sdaHigh(); // Release SDA
+      sdaHigh(); 
       i2cDelay();
       sclHigh();
       i2cDelay();
       sclLow();
     }
 
-    // ESPHome reverse-engineered memory offset for high currents
     uint8_t correctCurrent(uint8_t current) {
       if (current < 64) return current;
-      return current > 90 ? 90 + 34 : current + 34; // Max out at 90mA to prevent melting
+      return current > 90 ? 90 + 34 : current + 34; 
     }
 
   public:
@@ -111,7 +107,6 @@ class BP5758DDriver {
     }
 
     void setCurrent(uint8_t r, uint8_t g, uint8_t b, uint8_t cw, uint8_t ww) {
-      // Maps the WLED input to the physical channels defined in the enum
       _currents[BP_CH_RED] = correctCurrent(r);
       _currents[BP_CH_GREEN] = correctCurrent(g);
       _currents[BP_CH_BLUE] = correctCurrent(b);
@@ -125,36 +120,28 @@ class BP5758DDriver {
 
     void update() {
       uint8_t payload[17];
-      
-      // Byte 0: Start Address for 5 Channels
       payload[0] = _addrStart5CH;
-      // Byte 1: Enable all 5 channels
       payload[1] = _channelEnable;
       
-      // Bytes 2-6: Current Limits mapped strictly to the physical layout
-      payload[2] = _currents[0]; // Ch 1
-      payload[3] = _currents[1]; // Ch 2
-      payload[4] = _currents[2]; // Ch 3
-      payload[5] = _currents[3]; // Ch 4
-      payload[6] = _currents[4]; // Ch 5
+      payload[2] = _currents[0]; 
+      payload[3] = _currents[1]; 
+      payload[4] = _currents[2]; 
+      payload[5] = _currents[3]; 
+      payload[6] = _currents[4]; 
 
-      // Bytes 7-16: 10-bit PWM values (2 bytes per channel)
       for (uint8_t i = 0; i < BP_CH_COUNT; i++) {
         uint16_t pwm10 = (uint16_t)_values[i] << 2; 
         payload[7 + (i * 2)] = pwm10 & 0x1F;
         payload[8 + (i * 2)] = (pwm10 >> 5) & 0x1F;
       }
 
-      // Blast the entire 17-byte frame at once
       startCondition();
       for(int i = 0; i < 17; i++) {
         writeByte(payload[i]);
       }
       stopCondition();
 
-      // Check if all channels are explicitly off (0 brightness)
       if (_values[0] == 0 && _values[1] == 0 && _values[2] == 0 && _values[3] == 0 && _values[4] == 0) {
-        // Send the ESPHome Deep Sleep command
         payload[0] = _addrStandby;
         startCondition();
         for(int i = 0; i < 17; i++) {
@@ -172,35 +159,44 @@ class BP5758DUsermod : public Usermod {
   public:
     void setup() override {
       _bp.begin();
-      // Initialize exactly to your ESPHome configuration
       _bp.setCurrent(12, 12, 12, 30, 30);
     }
 
     void loop() override {
-      // THROTTLE: Only send data every 20ms (50 FPS limit)
       static uint32_t lastUpdate = 0;
-      if (millis() - lastUpdate < 20) return;
+      if (millis() - lastUpdate < 20) return; // 50 FPS throttle
       lastUpdate = millis();
 
       uint32_t c = strip.getPixelColor(0);
 
-      uint8_t r = ((c >> 16) & 0xFF) * bri / 255;
-      uint8_t g = ((c >> 8) & 0xFF) * bri / 255;
-      uint8_t b = (c & 0xFF) * bri / 255;
-      uint8_t w = ((c >> 24) & 0xFF) * bri / 255;
+      // Extract colors including the White channel
+      uint8_t r = (uint32_t)((c >> 16) & 0xFF) * bri / 255;
+      uint8_t g = (uint32_t)((c >> 8) & 0xFF) * bri / 255;
+      uint8_t b = (uint32_t)(c & 0xFF) * bri / 255;
+      uint8_t w = (uint32_t)((c >> 24) & 0xFF) * bri / 255;
 
       uint8_t cct = strip.getMainSegment().currentCCT();
       uint8_t cw = (uint16_t)w * cct / 255;
       uint8_t ww = (uint16_t)w * (255 - cct) / 255;
 
-      // Assign the colors to their mapped channels
+      // Assign to mapped channels
       _bp.setChannel(BP_CH_RED, r);
       _bp.setChannel(BP_CH_GREEN, g);
       _bp.setChannel(BP_CH_BLUE, b);
       _bp.setChannel(BP_CH_CW, cw);
       _bp.setChannel(BP_CH_WW, ww);
 
-      // PROTECT: Pause ESP8266 background tasks
+      noInterrupts(); // Protect I2C timing
+      _bp.update();
+      interrupts();
+    }
+
+      _bp.setChannel(BP_CH_RED, r);
+      _bp.setChannel(BP_CH_GREEN, g);
+      _bp.setChannel(BP_CH_BLUE, b);
+      _bp.setChannel(BP_CH_CW, cw);
+      _bp.setChannel(BP_CH_WW, ww);
+
       noInterrupts();
       _bp.update();
       interrupts();
