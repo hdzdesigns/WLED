@@ -179,12 +179,13 @@ class Bus {
     static constexpr bool hasWhite(uint8_t type) {
       return  (type >= TYPE_WS2812_1CH && type <= TYPE_WS2812_WWA) ||
               type == TYPE_SK6812_RGBW || type == TYPE_TM1814 || type == TYPE_UCS8904 ||
-              type == TYPE_FW1906 || type == TYPE_WS2805 || type == TYPE_SM16825 ||        // digital types with white channel
+              type == TYPE_FW1906 || type == TYPE_WS2805 || type == TYPE_SM16825 || type == TYPE_BP5758D || // digital types with white channel
               (type > TYPE_ONOFF && type <= TYPE_ANALOG_5CH && type != TYPE_ANALOG_3CH) || // analog types with white channel
               type == TYPE_NET_DDP_RGBW || type == TYPE_NET_ARTNET_RGBW;                   // network types with white channel
     }
     static constexpr bool hasCCT(uint8_t type) {
       return  type == TYPE_WS2812_2CH_X3 || type == TYPE_WS2812_WWA ||
+              type == TYPE_BP5758D       ||
               type == TYPE_ANALOG_2CH    || type == TYPE_ANALOG_5CH ||
               type == TYPE_FW1906        || type == TYPE_WS2805     ||
               type == TYPE_SM16825;
@@ -348,6 +349,35 @@ class BusOnOff : public Bus {
   private:
     uint8_t _pin;
     uint8_t _data;
+};
+
+class BusBP5758D : public Bus {
+  public:
+    BusBP5758D(const BusConfig &bc);
+    ~BusBP5758D() { cleanup(); }
+
+    void setPixelColor(unsigned pix, uint32_t c) override;
+    uint32_t getPixelColor(unsigned pix) const override;
+    size_t getPins(uint8_t* pinArray = nullptr) const override;
+    uint16_t getLEDCurrent() const override { return _milliAmpsPerLed; }
+    uint16_t getMaxCurrent() const override { return _milliAmpsMax; }
+    size_t getBusSize() const override { return sizeof(BusBP5758D); }
+    void show() override;
+    void cleanup();
+
+  private:
+    bool startCondition();
+    void stopCondition();
+    bool writeByte(uint8_t value);
+    bool sendFrame(uint8_t cmd, const uint8_t* data, uint8_t len);
+    bool applyCurrent();
+    static uint8_t encodeCurrent(uint8_t ma);
+
+    uint8_t _pins[2] = {255, 255}; // [0]=data, [1]=clock
+    uint8_t _values[5] = {0, 0, 0, 0, 0}; // R,G,B,CW,WW
+    uint8_t _currents[5] = {12, 12, 12, 30, 30};
+    uint8_t _milliAmpsPerLed = LED_MILLIAMPS_DEFAULT;
+    uint16_t _milliAmpsMax = ABL_MILLIAMPS_DEFAULT;
 };
 
 

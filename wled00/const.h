@@ -217,6 +217,7 @@ static_assert(WLED_MAX_BUSSES <= 32, "WLED_MAX_BUSSES exceeds hard limit");
 #define USERMOD_ID_RF433                 56     //Usermod "usermod_v2_RF433.h"
 #define USERMOD_ID_BRIGHTNESS_FOLLOW_SUN 57     //Usermod "usermod_v2_brightness_follow_sun.h"
 #define USERMOD_ID_USER_FX               58     //Usermod "user_fx"
+#define USERMOD_ID_BP5758D               59     //Usermod "BP5758D.cpp"
 
 //Wifi encryption type
 #ifdef WLED_ENABLE_WPA_ENTERPRISE
@@ -334,6 +335,7 @@ static_assert(WLED_MAX_BUSSES <= 32, "WLED_MAX_BUSSES exceeds hard limit");
 #define TYPE_ANALOG_MAX          47            // last usable analog type
 //Digital types (data + clock / SPI) (48-63)
 #define TYPE_2PIN_MIN            48
+#define TYPE_BP5758D             49
 #define TYPE_WS2801              50
 #define TYPE_APA102              51
 #define TYPE_LPD8806             52

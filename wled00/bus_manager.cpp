@@ -368,6 +368,7 @@ std::vector<LEDType> BusDigital::getLEDTypes() {
     {TYPE_WS2812_WWA,    "D",  PSTR("WS281x WWA")}, // amber ignored
     {TYPE_WS2801,        "2P", PSTR("WS2801")},
     {TYPE_APA102,        "2P", PSTR("APA102")},
+    {TYPE_BP5758D,       "2P", PSTR("BP5758D RGBCCT")},
     {TYPE_LPD8806,       "2P", PSTR("LPD8806")},
     {TYPE_LPD6803,       "2P", PSTR("LPD6803")},
     {TYPE_P9813,         "2P", PSTR("PP9813")},
@@ -678,6 +679,160 @@ std::vector<LEDType> BusOnOff::getLEDTypes() {
   return {
     {TYPE_ONOFF, "", PSTR("On/Off")},
   };
+}
+
+BusBP5758D::BusBP5758D(const BusConfig &bc)
+: Bus(bc.type, bc.start, bc.autoWhite, 1, bc.reversed)
+, _milliAmpsPerLed(bc.milliAmpsPerLed)
+, _milliAmpsMax(bc.milliAmpsMax)
+{
+  if (bc.type != TYPE_BP5758D) return;
+  if (!PinManager::allocatePin(bc.pins[0], true, PinOwner::BusDigital)) return;
+  if (!PinManager::allocatePin(bc.pins[1], true, PinOwner::BusDigital)) {
+    PinManager::deallocatePin(bc.pins[0], PinOwner::BusDigital);
+    return;
+  }
+
+  _pins[0] = bc.pins[0]; // data
+  _pins[1] = bc.pins[1]; // clock
+  pinMode(_pins[0], INPUT_PULLUP);
+  pinMode(_pins[1], INPUT_PULLUP);
+
+  _hasRgb = true;
+  _hasWhite = true;
+  _hasCCT = true;
+  _valid = true;
+  applyCurrent(); // initialize output current configuration
+}
+
+void BusBP5758D::cleanup() {
+  _valid = false;
+  PinManager::deallocatePin(_pins[1], PinOwner::BusDigital);
+  PinManager::deallocatePin(_pins[0], PinOwner::BusDigital);
+}
+
+size_t BusBP5758D::getPins(uint8_t* pinArray) const {
+  if (!_valid) return 0;
+  if (pinArray) {
+    pinArray[0] = _pins[0];
+    pinArray[1] = _pins[1];
+  }
+  return 2;
+}
+
+uint8_t BusBP5758D::encodeCurrent(uint8_t ma) {
+  if (ma < 5) ma = 5;
+  if (ma > 60) ma = 60;
+  return (ma - 4) / 2; // coarse 2mA mapping
+}
+
+bool BusBP5758D::startCondition() {
+  pinMode(_pins[0], INPUT_PULLUP);
+  pinMode(_pins[1], INPUT_PULLUP);
+  delayMicroseconds(2);
+  pinMode(_pins[0], OUTPUT);
+  digitalWrite(_pins[0], LOW);
+  delayMicroseconds(2);
+  pinMode(_pins[1], OUTPUT);
+  digitalWrite(_pins[1], LOW);
+  return true;
+}
+
+void BusBP5758D::stopCondition() {
+  pinMode(_pins[0], OUTPUT);
+  digitalWrite(_pins[0], LOW);
+  delayMicroseconds(2);
+  pinMode(_pins[1], INPUT_PULLUP);
+  delayMicroseconds(2);
+  pinMode(_pins[0], INPUT_PULLUP);
+  delayMicroseconds(2);
+}
+
+bool BusBP5758D::writeByte(uint8_t value) {
+  for (uint8_t i = 0; i < 8; i++) {
+    pinMode(_pins[1], OUTPUT);
+    digitalWrite(_pins[1], LOW);
+    if (value & 0x80) pinMode(_pins[0], INPUT_PULLUP);
+    else {
+      pinMode(_pins[0], OUTPUT);
+      digitalWrite(_pins[0], LOW);
+    }
+    delayMicroseconds(2);
+    pinMode(_pins[1], INPUT_PULLUP);
+    delayMicroseconds(2);
+    value <<= 1;
+  }
+
+  // ACK phase (chip may stretch/non-standard ACK behavior, poll briefly)
+  pinMode(_pins[0], INPUT_PULLUP);
+  delayMicroseconds(2);
+  pinMode(_pins[1], INPUT_PULLUP);
+  uint32_t start = micros();
+  while (digitalRead(_pins[0]) == HIGH) {
+    if ((uint32_t)(micros() - start) > 250) {
+      pinMode(_pins[1], OUTPUT);
+      digitalWrite(_pins[1], LOW);
+      return false;
+    }
+  }
+  delayMicroseconds(2);
+  pinMode(_pins[1], OUTPUT);
+  digitalWrite(_pins[1], LOW);
+  return true;
+}
+
+bool BusBP5758D::sendFrame(uint8_t cmd, const uint8_t* data, uint8_t len) {
+  startCondition();
+  if (!writeByte(cmd)) {
+    stopCondition();
+    return false;
+  }
+  for (uint8_t i = 0; i < len; i++) {
+    if (!writeByte(data[i])) {
+      stopCondition();
+      return false;
+    }
+  }
+  stopCondition();
+  return true;
+}
+
+bool BusBP5758D::applyCurrent() {
+  static const uint8_t CMD_SET_CURRENT = 0x40;
+  uint8_t payload[5];
+  for (uint8_t i = 0; i < 5; i++) payload[i] = encodeCurrent(_currents[i]);
+  return sendFrame(CMD_SET_CURRENT, payload, sizeof(payload));
+}
+
+void BusBP5758D::setPixelColor(unsigned pix, uint32_t c) {
+  if (!_valid || pix != 0) return; // BP5758D bus behaves as single logical pixel output
+  uint8_t cctWW, cctCW;
+  c = autoWhiteCalc(c, cctWW, cctCW);
+
+  _values[0] = R(c);
+  _values[1] = G(c);
+  _values[2] = B(c);
+  _values[3] = cctCW;
+  _values[4] = cctWW;
+}
+
+uint32_t BusBP5758D::getPixelColor(unsigned pix) const {
+  if (!_valid || pix != 0) return 0;
+  return RGBW32(_values[0], _values[1], _values[2], _values[3] + _values[4]);
+}
+
+void BusBP5758D::show() {
+  if (!_valid) return;
+  static const uint8_t CMD_SET_GREY = 0x66; // direct grayscale addressing
+
+  uint8_t payload[10];
+  for (uint8_t i = 0; i < 5; i++) {
+    uint8_t v = (uint16_t)_values[i] * _bri / 255;
+    uint16_t level = (uint16_t)v << 2; // map 8-bit into chip grayscale register range
+    payload[(i * 2)] = (level >> 8) & 0x03;
+    payload[(i * 2) + 1] = level & 0xFF;
+  }
+  sendFrame(CMD_SET_GREY, payload, sizeof(payload));
 }
 
 BusNetwork::BusNetwork(const BusConfig &bc)
@@ -1175,7 +1330,8 @@ size_t BusConfig::memUsage() const {
     mem += sizeof(BusNetwork) + (count * Bus::getNumberOfChannels(type)); // note: getNumberOfChannels() includes CCT channel if applicable but virtual buses do not use CCT channel buffer
   } else if (Bus::isDigital(type)) {
     // if any of digital buses uses I2S, there is additional common I2S DMA buffer not accounted for here
-    mem += sizeof(BusDigital) + PolyBus::memUsage(count + skipAmount, iType);
+    if (type == TYPE_BP5758D) mem += sizeof(BusBP5758D);
+    else mem += sizeof(BusDigital) + PolyBus::memUsage(count + skipAmount, iType);
   } else if (Bus::isOnOff(type)) {
     mem += sizeof(BusOnOff);
   } else {
@@ -1205,6 +1361,8 @@ int BusManager::add(const BusConfig &bc, bool placeholder) {
   } else if (Bus::isHub75(bc.type)) {
     busses.push_back(make_unique<BusHub75Matrix>(bc));
 #endif
+  } else if (bc.type == TYPE_BP5758D) {
+    busses.push_back(make_unique<BusBP5758D>(bc));
   } else if (Bus::isDigital(bc.type)) {
     busses.push_back(make_unique<BusDigital>(bc));
   } else if (Bus::isOnOff(bc.type)) {
@@ -1245,6 +1403,7 @@ String BusManager::getLEDTypesJSONString() {
 }
 
 uint8_t BusManager::getI(uint8_t busType, const uint8_t* pins, uint8_t driverPreference) {
+  if (busType == TYPE_BP5758D) return 0;
   return PolyBus::getI(busType, pins, driverPreference);
 }
 //do not call this method from system context (network callback)
