@@ -13,13 +13,13 @@
   #define USERMOD_ID_BP5758D 158
 #endif
 
-// BP5758D physical channel order perfectly mapped to your ESPHome configuration
+// BP5758D physical channel order mapped to your specific hardware
 enum : uint8_t {
-  BP_CH_BLUE = 0,   // ESPHome Channel 1
-  BP_CH_GREEN = 1,  // ESPHome Channel 2
-  BP_CH_RED = 2,    // ESPHome Channel 3
-  BP_CH_WW = 3,     // ESPHome Channel 4
-  BP_CH_CW = 4,     // ESPHome Channel 5
+  BP_CH_BLUE = 0,   // Channel 1: Blue
+  BP_CH_GREEN = 1,  // Channel 2: Green
+  BP_CH_RED = 2,    // Channel 3: Red
+  BP_CH_WW = 3,     // Channel 4: Warm White
+  BP_CH_CW = 4,     // Channel 5: Cold White
   BP_CH_COUNT
 };
 
@@ -84,6 +84,7 @@ class BP5758DDriver {
         value <<= 1;
       }
       
+      // 9th bit (ACK slot) - Blind Fire to prevent flickering
       sclLow();
       sdaHigh(); 
       i2cDelay();
@@ -92,6 +93,7 @@ class BP5758DDriver {
       sclLow();
     }
 
+    // Offset for high currents to prevent register mapping issues
     uint8_t correctCurrent(uint8_t current) {
       if (current < 64) return current;
       return current > 90 ? 90 + 34 : current + 34; 
@@ -123,24 +125,28 @@ class BP5758DDriver {
       payload[0] = _addrStart5CH;
       payload[1] = _channelEnable;
       
+      // Current limits
       payload[2] = _currents[0]; 
       payload[3] = _currents[1]; 
       payload[4] = _currents[2]; 
       payload[5] = _currents[3]; 
       payload[6] = _currents[4]; 
 
+      // PWM values
       for (uint8_t i = 0; i < BP_CH_COUNT; i++) {
         uint16_t pwm10 = (uint16_t)_values[i] << 2; 
         payload[7 + (i * 2)] = pwm10 & 0x1F;
         payload[8 + (i * 2)] = (pwm10 >> 5) & 0x1F;
       }
 
+      // Blast 17-byte frame
       startCondition();
       for(int i = 0; i < 17; i++) {
         writeByte(payload[i]);
       }
       stopCondition();
 
+      // Deep Sleep Check
       if (_values[0] == 0 && _values[1] == 0 && _values[2] == 0 && _values[3] == 0 && _values[4] == 0) {
         payload[0] = _addrStandby;
         startCondition();
@@ -169,7 +175,7 @@ class BP5758DUsermod : public Usermod {
 
       uint32_t c = strip.getPixelColor(0);
 
-      // Extract colors including the White channel
+      // Extract colors
       uint8_t r = (uint32_t)((c >> 16) & 0xFF) * bri / 255;
       uint8_t g = (uint32_t)((c >> 8) & 0xFF) * bri / 255;
       uint8_t b = (uint32_t)(c & 0xFF) * bri / 255;
@@ -179,24 +185,13 @@ class BP5758DUsermod : public Usermod {
       uint8_t cw = (uint16_t)w * cct / 255;
       uint8_t ww = (uint16_t)w * (255 - cct) / 255;
 
-      // Assign to mapped channels
       _bp.setChannel(BP_CH_RED, r);
       _bp.setChannel(BP_CH_GREEN, g);
       _bp.setChannel(BP_CH_BLUE, b);
       _bp.setChannel(BP_CH_CW, cw);
       _bp.setChannel(BP_CH_WW, ww);
 
-      noInterrupts(); // Protect I2C timing
-      _bp.update();
-      interrupts();
-    }
-
-      _bp.setChannel(BP_CH_RED, r);
-      _bp.setChannel(BP_CH_GREEN, g);
-      _bp.setChannel(BP_CH_BLUE, b);
-      _bp.setChannel(BP_CH_CW, cw);
-      _bp.setChannel(BP_CH_WW, ww);
-
+      // Protect I2C timing
       noInterrupts();
       _bp.update();
       interrupts();
