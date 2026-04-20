@@ -332,8 +332,10 @@ static_assert(WLED_MAX_BUSSES <= 32, "WLED_MAX_BUSSES exceeds hard limit");
 #define TYPE_ANALOG_5CH          45            //analog RGB + WW + CW
 #define TYPE_ANALOG_6CH          46            //analog RGB + A + WW + CW
 #define TYPE_ANALOG_MAX          47            // last usable analog type
-//Digital types (data + clock / SPI) (48-63)
-#define TYPE_2PIN_MIN            48
+#define TYPE_BP5758D             48            //BP5758D 5-channel LED driver
+#define TYPE_ANALOG_LIKE_MAX     48            // last analog-like type
+//Digital types (data + clock / SPI) (49-63)
+#define TYPE_2PIN_MIN            49
 #define TYPE_WS2801              50
 #define TYPE_APA102              51
 #define TYPE_LPD8806             52
@@ -362,7 +364,8 @@ static_assert(WLED_MAX_BUSSES <= 32, "WLED_MAX_BUSSES exceeds hard limit");
 #define COL_ORDER_RBG             3
 #define COL_ORDER_BGR             4
 #define COL_ORDER_GBR             5
-#define COL_ORDER_MAX             5
+#define COL_ORDER_RGB_CCT         6           //RGB + CCT (CW/WW)
+#define COL_ORDER_MAX             6
 
 //ESP-NOW
 #define ESP_NOW_STATE_UNINIT       0

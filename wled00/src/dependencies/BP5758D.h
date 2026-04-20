@@ -1,17 +1,6 @@
-#include "wled.h"
-
-// Default GPIOs. Override by editing these macros before compile if needed.
-#ifndef BP5758D_DATA_PIN
-  #define BP5758D_DATA_PIN 5
-#endif
-#ifndef BP5758D_CLK_PIN
-  #define BP5758D_CLK_PIN 4
-#endif
-
-// Define custom ID for WLED Usermod index
-#ifndef USERMOD_ID_BP5758D
-  #define USERMOD_ID_BP5758D 158
-#endif
+#pragma once
+#ifndef BP5758D_h
+#define BP5758D_h
 
 // BP5758D physical channel order mapped to your specific hardware
 enum : uint8_t {
@@ -158,49 +147,4 @@ class BP5758DDriver {
     }
 };
 
-class BP5758DUsermod : public Usermod {
-  private:
-    BP5758DDriver _bp = BP5758DDriver(BP5758D_DATA_PIN, BP5758D_CLK_PIN);
-
-  public:
-    void setup() override {
-      _bp.begin();
-      _bp.setCurrent(12, 12, 12, 30, 30);
-    }
-
-    void loop() override {
-      static uint32_t lastUpdate = 0;
-      if (millis() - lastUpdate < 20) return; // 50 FPS throttle
-      lastUpdate = millis();
-
-      uint32_t c = strip.getPixelColor(0);
-
-      // Extract colors
-      uint8_t r = (uint32_t)((c >> 16) & 0xFF) * bri / 255;
-      uint8_t g = (uint32_t)((c >> 8) & 0xFF) * bri / 255;
-      uint8_t b = (uint32_t)(c & 0xFF) * bri / 255;
-      uint8_t w = (uint32_t)((c >> 24) & 0xFF) * bri / 255;
-
-      uint8_t cct = strip.getMainSegment().currentCCT();
-      uint8_t cw = (uint16_t)w * cct / 255;
-      uint8_t ww = (uint16_t)w * (255 - cct) / 255;
-
-      _bp.setChannel(BP_CH_RED, r);
-      _bp.setChannel(BP_CH_GREEN, g);
-      _bp.setChannel(BP_CH_BLUE, b);
-      _bp.setChannel(BP_CH_CW, cw);
-      _bp.setChannel(BP_CH_WW, ww);
-
-      // Protect I2C timing
-      noInterrupts();
-      _bp.update();
-      interrupts();
-    }
-
-    uint16_t getId() override {
-      return USERMOD_ID_BP5758D;
-    }
-};
-
-static BP5758DUsermod bp5758d;
-REGISTER_USERMOD(bp5758d);
+#endif

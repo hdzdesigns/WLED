@@ -332,7 +332,7 @@
 				}
 				gId("rf"+n).onclick = mustR(t) ? (()=>{return false}) : (()=>{});           // prevent change change of "Refresh" checkmark when mandatory
 				gRGBW |= hasW(t);                                                           // RGBW checkbox
-				gId("co"+n).style.display = (isVir(t) || isAna(t) || isHub75(t)) ? "none":"inline";       // hide color order for PWM
+				gId("co"+n).style.display = (isVir(t) || (isAna(t) && !hasCCT(t)) || isHub75(t) || t == 48) ? "none":"inline";       // hide color order for PWM unless CCT, and for BP5758D
 				gId("dig"+n+"w").style.display = (isDig(t) && hasW(t)) ? "inline":"none";   // show swap channels dropdown
 				gId("dig"+n+"w").querySelector("[data-opt=CCT]").disabled = !hasCCT(t);     // disable WW/CW swapping
 				if (!(isDig(t) && hasW(t))) d.Sf["WO"+n].value = 0;                         // reset swapping
@@ -557,6 +557,7 @@ mA/LED: <select name="LAsel${s}" onchange="enLA(this,'${s}');UI();">
 <option value="3">RBG</option>
 <option value="4">BGR</option>
 <option value="5">GBR</option>
+<option value="6">RGB+CCT</option>
 </select></div>
 <div id="dig${s}w" style="display:none">Swap: <select name="WO${s}"><option value="0">None</option><option value="1">W & B</option><option value="2">W & G</option><option value="3">W & R</option><option data-opt="CCT" value="4">WW & CW</option></select></div>
 <div id="dig${s}l" style="display:none">Clock: <select name="SP${s}"><option value="0">Slowest</option><option value="1">Slow</option><option value="2">Normal</option><option value="3">Fast</option><option value="4">Fastest</option></select></div>

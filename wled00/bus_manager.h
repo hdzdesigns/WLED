@@ -14,6 +14,7 @@
  */
 
 #include "const.h"
+#include "src/dependencies/BP5758D.h"
 #include "pin_manager.h"
 #include <vector>
 #include <memory>
@@ -171,7 +172,7 @@ class Bus {
     inline  bool     containsPixel(uint16_t pix) const          { return pix >= _start && pix < _start + _len; }
 
     static inline std::vector<LEDType> getLEDTypes()            { return {{TYPE_NONE, "", PSTR("None")}}; } // not used. just for reference for derived classes
-    static constexpr size_t   getNumberOfPins(uint8_t type)     { return isVirtual(type) ? 4 : isPWM(type) ? numPWMPins(type) : isHub75(type) ? 5 : is2Pin(type) + 1; } // credit @PaoloTK
+    static constexpr size_t   getNumberOfPins(uint8_t type)     { return type == TYPE_BP5758D ? 2 : isVirtual(type) ? 4 : isPWM(type) ? numPWMPins(type) : isHub75(type) ? 5 : is2Pin(type) + 1; } // credit @PaoloTK
     static constexpr size_t   getNumberOfChannels(uint8_t type) { return hasWhite(type) + 3*hasRGB(type) + hasCCT(type); }
     static constexpr bool hasRGB(uint8_t type) {
       return !((type >= TYPE_WS2812_1CH && type <= TYPE_WS2812_WWA) || type == TYPE_ANALOG_1CH || type == TYPE_ANALOG_2CH || type == TYPE_ONOFF);
@@ -187,13 +188,13 @@ class Bus {
       return  type == TYPE_WS2812_2CH_X3 || type == TYPE_WS2812_WWA ||
               type == TYPE_ANALOG_2CH    || type == TYPE_ANALOG_5CH ||
               type == TYPE_FW1906        || type == TYPE_WS2805     ||
-              type == TYPE_SM16825;
+              type == TYPE_SM16825       || type == TYPE_BP5758D;
     }
     static constexpr bool  isTypeValid(uint8_t type)  { return (type > 15 && type < 128); }
     static constexpr bool  isDigital(uint8_t type)    { return (type >= TYPE_DIGITAL_MIN && type <= TYPE_DIGITAL_MAX) || is2Pin(type); }
     static constexpr bool  is2Pin(uint8_t type)       { return (type >= TYPE_2PIN_MIN && type <= TYPE_2PIN_MAX); }
     static constexpr bool  isOnOff(uint8_t type)      { return (type == TYPE_ONOFF); }
-    static constexpr bool  isPWM(uint8_t type)        { return (type >= TYPE_ANALOG_MIN && type <= TYPE_ANALOG_MAX); }
+    static constexpr bool  isPWM(uint8_t type)        { return (type >= TYPE_ANALOG_MIN && type <= TYPE_ANALOG_LIKE_MAX) && type != TYPE_BP5758D; }
     static constexpr bool  isVirtual(uint8_t type)    { return (type >= TYPE_VIRTUAL_MIN && type <= TYPE_VIRTUAL_MAX); }
     static constexpr bool  isHub75(uint8_t type)      { return (type >= TYPE_HUB75MATRIX_MIN && type <= TYPE_HUB75MATRIX_MAX); }
     static constexpr bool  is16bit(uint8_t type)      { return type == TYPE_UCS8903 || type == TYPE_UCS8904 || type == TYPE_SM16825; }
@@ -326,6 +327,33 @@ class BusPwm : public Bus {
     #endif
     uint8_t _depth;
     uint16_t _frequency;
+
+    void deallocatePins();
+};
+
+
+class BusBP5758D : public Bus {
+  public:
+    BusBP5758D(const BusConfig &bc);
+    ~BusBP5758D();
+
+    void setPixelColor(unsigned pix, uint32_t c) override;
+    uint32_t getPixelColor(unsigned pix) const override;
+    size_t   getPins(uint8_t* pinArray = nullptr) const override;
+    void     setColorOrder(uint8_t co) override;
+    uint8_t  getColorOrder() const override { return _colorOrder; }
+    size_t   getBusSize() const override   { return sizeof(BusBP5758D); }
+    void show() override;
+    inline void cleanup() { deallocatePins(); }
+
+    static std::vector<LEDType> getLEDTypes();
+
+  private:
+    uint8_t _pins[2];
+    BP5758DDriver* _driver;
+    uint32_t _pixelColor;
+    uint8_t _ww, _cw;
+    uint8_t _colorOrder;
 
     void deallocatePins();
 };

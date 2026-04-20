@@ -633,6 +633,103 @@ void BusPwm::deallocatePins() {
 }
 
 
+BusBP5758D::BusBP5758D(const BusConfig &bc)
+: Bus(bc.type, bc.start, bc.autoWhite, 1, bc.reversed)
+, _driver(nullptr)
+, _pixelColor(0)
+, _ww(0)
+, _cw(0)
+, _colorOrder(bc.colorOrder)
+{
+  if (bc.type != TYPE_BP5758D) return;
+
+  if (bc.pins[0] == 255 || bc.pins[1] == 255) return; // invalid pin
+  _pins[0] = bc.pins[0];
+  _pins[1] = bc.pins[1];
+
+  if (!PinManager::allocatePin(_pins[0], true, PinOwner::BusBP5758D) ||
+      !PinManager::allocatePin(_pins[1], true, PinOwner::BusBP5758D)) {
+    deallocatePins();
+    return;
+  }
+
+  _driver = new BP5758DDriver(_pins[0], _pins[1]);
+  _driver->begin();
+  _driver->setCurrent(12, 12, 12, 30, 30); // default currents
+
+  _hasRgb = true;
+  _hasWhite = false;
+  _hasCCT = true;
+  _valid = true;
+}
+
+BusBP5758D::~BusBP5758D() {
+  cleanup();
+}
+
+void BusBP5758D::setPixelColor(unsigned pix, uint32_t c) {
+  if (pix != 0) return; // only single pixel
+  if (Bus::_cct >= 1900) c = colorBalanceFromKelvin(Bus::_cct, c); //color correction from CCT
+  c = autoWhiteCalc(c, _ww, _cw);
+  _pixelColor = c;
+}
+
+uint32_t BusBP5758D::getPixelColor(unsigned pix) const {
+  if (pix != 0) return 0;
+  return RGBW32(R(_pixelColor), G(_pixelColor), B(_pixelColor), _ww + _cw);
+}
+
+void BusBP5758D::setColorOrder(uint8_t co) {
+  _colorOrder = co;
+}
+
+size_t BusBP5758D::getPins(uint8_t* pinArray) const {
+  if (!_valid) return 0;
+  if (pinArray) {
+    pinArray[0] = _pins[0];
+    pinArray[1] = _pins[1];
+  }
+  return 2;
+}
+
+void BusBP5758D::show() {
+  if (!_valid || !_driver) return;
+
+  uint32_t c = _pixelColor;
+  uint8_t r = (uint32_t)((c >> 16) & 0xFF) * _bri / 255;
+  uint8_t g = (uint32_t)((c >> 8) & 0xFF) * _bri / 255;
+  uint8_t b = (uint32_t)(c & 0xFF) * _bri / 255;
+
+  uint8_t ww = (uint16_t)_ww * _bri / 255;
+  uint8_t cw = (uint16_t)_cw * _bri / 255;
+
+  _driver->setChannel(BP_CH_RED, r);
+  _driver->setChannel(BP_CH_GREEN, g);
+  _driver->setChannel(BP_CH_BLUE, b);
+  _driver->setChannel(BP_CH_CW, cw);
+  _driver->setChannel(BP_CH_WW, ww);
+
+  noInterrupts();
+  _driver->update();
+  interrupts();
+}
+
+std::vector<LEDType> BusBP5758D::getLEDTypes() {
+  return {
+    {TYPE_BP5758D, "2P", PSTR("BP5758D")},
+  };
+}
+
+void BusBP5758D::deallocatePins() {
+  if (_driver) {
+    delete _driver;
+    _driver = nullptr;
+  }
+  PinManager::deallocatePin(_pins[0], PinOwner::BusBP5758D);
+  PinManager::deallocatePin(_pins[1], PinOwner::BusBP5758D);
+}
+
+
 BusOnOff::BusOnOff(const BusConfig &bc)
 : Bus(bc.type, bc.start, bc.autoWhite, 1, bc.reversed)
 , _data(0)
@@ -1178,6 +1275,8 @@ size_t BusConfig::memUsage() const {
     mem += sizeof(BusDigital) + PolyBus::memUsage(count + skipAmount, iType);
   } else if (Bus::isOnOff(type)) {
     mem += sizeof(BusOnOff);
+  } else if (type == TYPE_BP5758D) {
+    mem += sizeof(BusBP5758D);
   } else {
     mem += sizeof(BusPwm);
   }
@@ -1195,7 +1294,7 @@ int BusManager::add(const BusConfig &bc, bool placeholder) {
     if (bus->is2Pin()) twoPin++;
   }
   digital += (Bus::isDigital(bc.type) && !Bus::is2Pin(bc.type));
-  analog  += (Bus::isPWM(bc.type) ? Bus::numPWMPins(bc.type) : 0);
+  analog  += (Bus::isPWM(bc.type) && bc.type != TYPE_BP5758D ? Bus::numPWMPins(bc.type) : 0);
   if (digital > WLED_MAX_DIGITAL_CHANNELS || analog > WLED_MAX_ANALOG_CHANNELS) placeholder = true; // TODO: add errorFlag here
   if (placeholder) {
     busses.push_back(make_unique<BusPlaceholder>(bc));
@@ -1209,6 +1308,8 @@ int BusManager::add(const BusConfig &bc, bool placeholder) {
     busses.push_back(make_unique<BusDigital>(bc));
   } else if (Bus::isOnOff(bc.type)) {
     busses.push_back(make_unique<BusOnOff>(bc));
+  } else if (bc.type == TYPE_BP5758D) {
+    busses.push_back(make_unique<BusBP5758D>(bc));
   } else {
     busses.push_back(make_unique<BusPwm>(bc));
   }
@@ -1234,6 +1335,7 @@ String BusManager::getLEDTypesJSONString() {
   json += LEDTypesToJson(BusDigital::getLEDTypes());
   json += LEDTypesToJson(BusOnOff::getLEDTypes());
   json += LEDTypesToJson(BusPwm::getLEDTypes());
+  json += LEDTypesToJson(BusBP5758D::getLEDTypes());
   json += LEDTypesToJson(BusNetwork::getLEDTypes());
   //json += LEDTypesToJson(BusVirtual::getLEDTypes());
   #ifdef WLED_ENABLE_HUB75MATRIX
